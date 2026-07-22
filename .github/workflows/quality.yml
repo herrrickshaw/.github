@@ -1,0 +1,44 @@
+name: quality-gate
+
+# Reusable quality gate for herrrickshaw repos.
+# Call from any repo with:
+#
+#   jobs:
+#     quality:
+#       uses: herrrickshaw/.github/.github/workflows/quality.yml@main
+#       with:
+#         python: "true"        # set "false" for non-Python repos
+#
+on:
+  workflow_call:
+    inputs:
+      python:
+        description: Run ruff + black checks (Python repos)
+        type: string
+        default: "true"
+
+jobs:
+  gitleaks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Scan full history for secrets
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  python-lint:
+    if: inputs.python == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install ruff black
+      - name: ruff
+        run: ruff check . --output-format=github
+      - name: black
+        run: black --check --diff .
