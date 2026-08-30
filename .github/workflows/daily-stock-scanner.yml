@@ -1,0 +1,138 @@
+name: daily-stock-scanner
+
+# Reusable daily-scan runner for herrrickshaw stock-screening repos
+# (global-market-research-platform, global-stock-screener, etc).
+#
+# The screener logic (strategies, bundle validation, watchlist digest, ...)
+# stays in the calling repo — this workflow only owns the plumbing around it:
+# restore cached data from Dropbox/Google Drive (rclone), run the repo's own
+# scan command, upload the generated reports, then sync any refreshed cache
+# back up. Keeping the scan logic in one place (its repo) avoids the
+# "second copy elsewhere without a pointer back" trap from
+# NEW_REPO_CHECKLIST.md.
+#
+# Call it with:
+#
+#   on:
+#     schedule:
+#       - cron: "0 19 * * 0-4"   # 00:30 IST, weekdays
+#     workflow_dispatch: {}
+#
+#   jobs:
+#     scan:
+#       uses: herrrickshaw/.github/.github/workflows/daily-stock-scanner.yml@main
+#       with:
+#         script: "./daily_pipeline.sh --draft"
+#         data-pull: |
+#           dropbox:market-pipeline-cache/cache_seed ./cache_seed
+#           gdrive:market-pipeline-cache/cache_seed ./cache_seed
+#         data-push: |
+#           dropbox:market-pipeline-cache/reports ./reports
+#         report-glob: "reports/**/*.html"
+#       secrets: inherit
+#
+# RCLONE_CONF_B64 is a base64-encoded rclone.conf holding the account's
+# "dropbox" and "gdrive" remotes (same remote names DATA_POINTERS.md already
+# uses for the Dropbox backup channel). Omit the secret entirely for a repo
+# that only needs the scan-and-upload-artifact part, with no cloud data sync.
+
+on:
+  workflow_call:
+    inputs:
+      python-version:
+        description: Python version to run the scan under
+        type: string
+        default: "3.11"
+      working-directory:
+        description: Directory to run install/scan/upload from
+        type: string
+        default: "."
+      install:
+        description: Dependency-install command; skipped if empty
+        type: string
+        default: "pip install -r requirements.txt"
+      script:
+        description: Command that runs the actual daily scan (required)
+        type: string
+      data-pull:
+        description: >
+          Newline-separated "remote:path local/path" pairs rclone copies down
+          before the scan.
+        type: string
+        default: ""
+      data-push:
+        description: >
+          Newline-separated "remote:path local/path" pairs rclone copies up
+          after the scan.
+        type: string
+        default: ""
+      report-glob:
+        description: Glob (relative to working-directory) of report files to upload
+        type: string
+        default: "**/*.html"
+      artifact-name:
+        description: Name of the uploaded reports artifact
+        type: string
+        default: "daily-scan-reports"
+    secrets:
+      RCLONE_CONF_B64:
+        description: base64-encoded rclone.conf with "dropbox" and "gdrive" remotes
+        required: false
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ${{ inputs.working-directory }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ inputs.python-version }}
+
+      - name: Install dependencies
+        if: inputs.install != ''
+        run: ${{ inputs.install }}
+
+      - name: Install rclone
+        if: ${{ secrets.RCLONE_CONF_B64 != '' }}
+        run: curl https://rclone.org/install.sh | sudo bash
+
+      - name: Configure rclone (Dropbox + Google Drive)
+        if: ${{ secrets.RCLONE_CONF_B64 != '' }}
+        run: |
+          mkdir -p ~/.config/rclone
+          echo "$RCLONE_CONF_B64" | base64 -d > ~/.config/rclone/rclone.conf
+        env:
+          RCLONE_CONF_B64: ${{ secrets.RCLONE_CONF_B64 }}
+
+      - name: Pull cached data (Dropbox / Google Drive)
+        if: ${{ secrets.RCLONE_CONF_B64 != '' && inputs.data-pull != '' }}
+        run: |
+          while IFS= read -r pair; do
+            [ -z "$pair" ] && continue
+            echo "rclone copy $pair"
+            rclone copy $pair --create-empty-src-dirs
+          done <<< "${{ inputs.data-pull }}"
+
+      - name: Run daily scan
+        run: ${{ inputs.script }}
+
+      - name: Push refreshed data (Dropbox / Google Drive)
+        if: ${{ secrets.RCLONE_CONF_B64 != '' && inputs.data-push != '' }}
+        run: |
+          while IFS= read -r pair; do
+            [ -z "$pair" ] && continue
+            echo "rclone copy $pair"
+            rclone copy $pair
+          done <<< "${{ inputs.data-push }}"
+
+      - name: Upload reports
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ inputs.artifact-name }}
+          path: ${{ inputs.working-directory }}/${{ inputs.report-glob }}
+          if-no-files-found: warn
+          retention-days: 14
