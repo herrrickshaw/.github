@@ -1,0 +1,5 @@
+[run]
+source = cite
+omit =
+    tests/*
+    */conftest.py
