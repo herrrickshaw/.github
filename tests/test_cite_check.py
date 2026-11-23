@@ -43,6 +43,17 @@ def test_load_bib_skips_blank_surnames(cc):
     assert ("realname", "2010") in pairs and "" not in names and ("", "2010") not in pairs
 
 
+def test_load_bib_folds_unicode_and_strips_braces(cc, tmp_path):
+    pairs, _ = cc.load_bib()
+    assert ("muller", "2001") in pairs and ("meer", "2005") in pairs and ("van der meer", "2005") in pairs
+    assert findings(cc, "Muller (2001) and Meer (2005) and M\u00fcller (2001).\n", tmp_path) == []
+
+
+def test_load_bib_registers_only_the_first_year_of_an_entry(cc):
+    pairs, _ = cc.load_bib()
+    assert ("twoyears", "2000") in pairs and ("twoyears", "1999") not in pairs
+
+
 def test_load_bib_resets_between_entries(cc):
     pairs, _ = cc.load_bib()
     assert ("ghost", "2000") not in pairs and ("ghost", "1993") not in pairs and ("piotroski", "1993") not in pairs
@@ -110,6 +121,28 @@ def test_quote_adjacent_to_known_citation(cc, tmp_path):
     out = findings(cc, 'He wrote "value matters" Piotroski (2000) says.\nPiotroski (2000)" ends.\n“Piotroski (2000)”\n', tmp_path)
     assert [(f[0], f[1]) for f in out] == [("QUOTE?", 1), ("QUOTE?", 2), ("QUOTE?", 3)]
     assert out[0][3] == "quote mark abuts citation — verify verbatim"
+
+
+def test_curly_quotes_are_detected_on_either_side(cc, tmp_path):
+    assert [f[0] for f in findings(cc, "\u201cPiotroski (2000)\n", tmp_path)] == ["QUOTE?"]
+    assert [f[0] for f in findings(cc, "Piotroski (2000)\u201d\n", tmp_path)] == ["QUOTE?"]
+
+
+def test_year_suffix_letter_is_accepted_after_the_year(cc, tmp_path):
+    assert [f[0] for f in findings(cc, "Zorblax (2020a) said so.\n", tmp_path)] == ["UNKNOWN"]
+
+
+def test_up_to_five_author_chain_is_one_citation(cc, tmp_path):
+    out = findings(cc, "Adams, Baker, Clark, Davis, Evans (2001) said so.\n", tmp_path)
+    assert [f[2] for f in out] == ["Adams, Baker, Clark, Davis, Evans (2001)"]
+
+
+def test_quote_warnings_alone_do_not_fail_the_run(cc, monkeypatch, tmp_path, capsys):
+    f = tmp_path / "q.md"
+    f.write_text('He said "x" Piotroski (2000).\n')
+    assert run_main(cc, monkeypatch, str(f)) == 0
+    cap = capsys.readouterr()
+    assert "QUOTE?" in cap.out and cap.err == ""
 
 
 def test_quote_window_is_two_characters_each_side(cc, tmp_path):
@@ -186,7 +219,7 @@ def test_main_skips_self_and_audit_files(cc, monkeypatch, capsys, tmp_path):
 @pytest.mark.parametrize("flag,expected_cmd", [("--all", ["git", "ls-files"]), ("--staged", ["git", "diff", "--cached", "--name-only"])])
 def test_main_git_modes(cc, monkeypatch, capsys, tmp_path, flag, expected_cmd):
     (tmp_path / "a.md").write_text("Zorblax (2020).\n")
-    (tmp_path / "b.py").write_text("# Piotroski (2000)\n")
+    (tmp_path / "b.py").write_text("# Zorblax (2020)\n")
     (tmp_path / "c.txt").write_text("Zorblax (2020).\n")
     seen = {}
 
@@ -199,7 +232,8 @@ def test_main_git_modes(cc, monkeypatch, capsys, tmp_path, flag, expected_cmd):
     assert run_main(cc, monkeypatch, flag) == 1
     out = capsys.readouterr().out
     assert seen["cmd"] == expected_cmd
-    assert "UNKNOWN  a.md:1" in out and "c.txt" not in out and "gone.md" not in out        # only existing .py/.md files
+    assert "UNKNOWN  a.md:1" in out and "UNKNOWN  b.py:1" in out                          # both .md and .py are scanned
+    assert "c.txt" not in out and "gone.md" not in out
 
 
 def test_main_all_flag_must_be_alone(cc, monkeypatch, capsys, tmp_path):

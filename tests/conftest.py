@@ -41,6 +41,19 @@ BIB_TEXT = r"""% comment
   author  = {, Nameless and Realname, Joe},
   year    = {2010}
 }
+@article{muller2001,
+  author  = {Müller, Hans},
+  year    = {2001}
+}
+@article{meer2005,
+  author  = {{Van der Meer}, Hans},
+  year    = {2005}
+}
+@article{twoyears,
+  author  = {Twoyears, Tom},
+  year    = {2000},
+  year    = {1999}
+}
 @article{noyear,
   author  = {Ghost, Author}
 }
